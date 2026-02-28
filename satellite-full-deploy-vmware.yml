@@ -5,6 +5,9 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  tags:
+    - credentials
+    - satellite
 
   vars_prompt:
     - name: rhsm_username
@@ -26,6 +29,8 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  tags:
+    - provision
 
   vars:
     satellite_vm_ip: "192.168.1.100"
@@ -152,6 +157,8 @@
 - name: Install and configure Red Hat Satellite
   hosts: satellite
   gather_facts: true
+  tags:
+    - satellite
 
   tasks:
     - name: Install and configure Red Hat Satellite

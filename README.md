@@ -2,15 +2,17 @@
 
 Playbook that automates the full deployment of **Red Hat Satellite 6.18** on VMware vSphere — from creating the VM with RHEL 9 to installing and configuring Satellite.
 
-The process is split into two plays:
+The process is split into three plays:
 
-1. **VM Provisioning** — creates a VM on vSphere and installs RHEL 9 via ISO + automated Kickstart (role `install-rhel-from-iso-vmware`)
-2. **Satellite Installation** — registers the server with RHSM, installs and configures Satellite with repositories, content views, lifecycle environments and activation keys (role `satellite-install`)
+1. **Collect credentials** — prompts for RHSM credentials upfront, before any provisioning begins
+2. **VM Provisioning** — creates a VM on vSphere and installs RHEL 9 via ISO + automated Kickstart (role `install_rhel_from_iso_vmware`)
+3. **Satellite Installation** — registers the server with RHSM, installs and configures Satellite with repositories, content views, lifecycle environments and activation keys (role `satellite_install`)
 
 ## Project structure
 
 ```
 .
+├── ansible.cfg                        # Ansible configuration
 ├── satellite-full-deploy-vmware.yml   # Main playbook
 ├── requirements.yml                   # Required roles and collections
 ├── files/
@@ -58,7 +60,6 @@ Vault contents:
 ```yaml
 vault_vcenter_password: "your-vcenter-password"
 vault_ks_root_password: "$6$rounds=4096$salt$hash..."
-vault_root_password: "vm-root-password"
 ```
 
 To generate SHA-512 hashes compatible with Kickstart:
@@ -72,7 +73,7 @@ python3 -c "import crypt; print(crypt.crypt('YourPassword', crypt.mksalt(crypt.M
 Upload the RHEL 9 ISO to the VMware datastore and set the `rhel_iso_path` variable in the playbook:
 
 ```yaml
-rhel_iso_path: "[datastore1] iso/rhel-9.4-x86_64-dvd.iso"
+rhel_iso_path: "[datastore1] iso/rhel-9.6-x86_64-dvd.iso"
 ```
 
 ### 3. Satellite manifest
@@ -83,11 +84,22 @@ Place the `manifest.zip` file (generated from the [Red Hat Customer Portal](http
 
 Edit `satellite-full-deploy-vmware.yml` and adjust the variables to match your environment.
 
-#### Play 1 — VM Provisioning
+#### Play 2 — VM Provisioning
+
+**Network variables** (defined in the `vars` block):
 
 | Variable | Description | Example |
 |---|---|---|
 | `satellite_vm_ip` | VM static IP | `192.168.1.100` |
+| `satellite_vm_mask` | Network mask | `255.255.255.0` |
+| `satellite_vm_gateway` | Default gateway | `192.168.1.1` |
+| `satellite_vm_dns` | DNS server | `192.168.1.1` |
+| `satellite_vm_hostname` | VM FQDN | `satellite.example.com` |
+
+**Role variables** (passed to `install_rhel_from_iso_vmware`):
+
+| Variable | Description | Example |
+|---|---|---|
 | `vcenter_hostname` | vCenter address | `vcenter.example.com` |
 | `vcenter_username` | vCenter user | `administrator@vsphere.local` |
 | `vcenter_password` | vCenter password (vault) | `{{ vault_vcenter_password }}` |
@@ -95,21 +107,19 @@ Edit `satellite-full-deploy-vmware.yml` and adjust the variables to match your e
 | `vcenter_cluster` | Cluster name | `Cluster01` |
 | `vcenter_datastore` | Datastore | `datastore1` |
 | `vcenter_network` | VM network | `VM Network` |
+| `vcenter_folder` | VM folder | `/vm/satellite` |
 | `vm_name` | VM name | `satellite` |
 | `vm_num_cpus` | vCPUs | `4` |
 | `vm_memory_mb` | RAM in MB | `20480` |
-| `vm_disk_size_in_gb` | Disk in GB | `500` |
-| `vm_network_mask` | Network mask | `255.255.255.0` |
-| `vm_network_gateway` | Gateway | `192.168.1.1` |
-| `vm_network_dns` | DNS server | `192.168.1.1` |
-| `vm_hostname` | VM FQDN | `satellite.example.com` |
-| `rhel_iso_path` | ISO path on datastore | `[datastore1] iso/rhel-9.4-x86_64-dvd.iso` |
+| `rhel_iso_path` | ISO path on datastore | `[datastore1] iso/rhel-9.6-x86_64-dvd.iso` |
+| `ks_iso_datastore` | Datastore for kickstart ISO | `datastore1` |
 | `ks_root_password` | Root password (vault) | `{{ vault_ks_root_password }}` |
 | `ks_timezone` | Timezone | `America/Sao_Paulo` |
+| `ks_lvs` | OS disk LVM layout | See playbook |
+| `vm_extra_disk` | Extra disk for Satellite storage | See playbook |
+| `ks_extra_packages` | Additional packages | See playbook |
 
-#### Play 2 — Satellite Installation
-
-RHSM credentials are prompted interactively during execution.
+#### Play 3 — Satellite Installation
 
 | Variable | Description | Default |
 |---|---|---|
@@ -119,7 +129,7 @@ RHSM credentials are prompted interactively during execution.
 | `satellite_install_location` | Initial location | `ACME` |
 | `satellite_install_version` | Satellite version | `6.18` |
 | `satellite_install_base_os` | Base operating system | `rhel9` |
-| `satellite_install_manifest_path` | Manifest file path | `manifest.zip` |
+| `satellite_install_manifest_path` | Manifest file path | `{{ playbook_dir }}/files/manifest.zip` |
 | `satellite_install_rhel_versions` | RHEL versions for repos/CVs | `[8, 9, 10]` |
 | `satellite_install_epel` | Enable EPEL repos | `true` |
 | `satellite_install_lifecycle_envs` | Lifecycle environments | DEV → HML → PRD |
@@ -138,7 +148,7 @@ ansible-playbook satellite-full-deploy-vmware.yml --ask-vault-pass \
   -e vm_force_recreate=true
 ```
 
-During execution, the playbook will interactively prompt for:
+At the start of execution, the playbook will interactively prompt for:
 - **RHSM Username** — Red Hat Customer Portal username
 - **RHSM Password** — Red Hat Customer Portal password
 
@@ -146,7 +156,15 @@ During execution, the playbook will interactively prompt for:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  Play 1: VM Provisioning (localhost)                    │
+│  Play 1: Collect credentials (localhost)                │
+│                                                         │
+│  1. Prompt for RHSM Username and Password               │
+│  2. Store credentials for later plays                   │
+└────────────────────────┬────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│  Play 2: VM Provisioning (localhost)                    │
 │                                                         │
 │  1. Verify xorrisofs is installed                       │
 │  2. Generate Kickstart from template                    │
@@ -161,7 +179,7 @@ During execution, the playbook will interactively prompt for:
                          │
                          ▼
 ┌─────────────────────────────────────────────────────────┐
-│  Play 2: Satellite Installation (provisioned VM)        │
+│  Play 3: Satellite Installation (provisioned VM)        │
 │                                                         │
 │  1. Configure firewall                                  │
 │  2. Register with RHSM and enable repos                 │
@@ -183,8 +201,8 @@ During execution, the playbook will interactively prompt for:
 
 | Role | Repository | Description |
 |---|---|---|
-| `install-rhel-from-iso-vmware` | [GitHub](https://github.com/andrewlinuxadmin/ansible-install-rhel-from-iso-vmware) | VM provisioning and RHEL installation via ISO + Kickstart |
-| `satellite-install` | [GitHub](https://github.com/andrewlinuxadmin/ansible-satellite-install) | Red Hat Satellite installation and configuration |
+| `install_rhel_from_iso_vmware` | [GitHub](https://github.com/andrewlinuxadmin/ansible-install-rhel-from-iso-vmware) | VM provisioning and RHEL installation via ISO + Kickstart |
+| `satellite_install` | [GitHub](https://github.com/andrewlinuxadmin/ansible-satellite-install) | Red Hat Satellite installation and configuration |
 
 ## Required collections
 
@@ -193,8 +211,8 @@ During execution, the playbook will interactively prompt for:
 | `community.vmware` >= 4.0 | VMware modules |
 | `community.general` | General-purpose modules |
 | `ansible.posix` | POSIX modules |
-| `satellite-operations-collection` | Satellite operations |
-| `satellite-ansible-collection` | Ansible modules for Satellite |
+| `redhat.satellite_operations` | Satellite operations |
+| `redhat.satellite` | Ansible modules for Satellite |
 
 ## Important notes
 
@@ -203,4 +221,5 @@ During execution, the playbook will interactively prompt for:
 - SSH root login is enabled (`PermitRootLogin: yes`) as it is required for the Satellite installation
 - Default installation timeout is 900s (15 min); adjust `vm_wait_for_ip_timeout` as needed
 - The `xorriso` package (provides `xorrisofs`) is required on the Ansible controller
-- Satellite minimum hardware requirements (4 vCPUs, 20 GB RAM, 500 GB disk) are already configured in the playbook
+- Satellite minimum hardware requirements (4 vCPUs, 20 GB RAM) are already configured in the playbook
+- The OS disk uses custom LVM partitioning and a second 400 GB disk is added for Satellite storage (`/var/lib/pulp`, `/var/lib/pgsql`, `/opt/puppetlabs`, `/var/lib/containers`)
