@@ -1,0 +1,27 @@
+---
+roles:
+  - src: https://github.com/andrewlinuxadmin/ansible-install-rhel-from-iso-vmware.git
+    scm: git
+    version: main
+    name: install_rhel_from_iso_vmware
+
+  - src: https://github.com/andrewlinuxadmin/ansible-satellite-install.git
+    scm: git
+    version: main
+    name: satellite_install
+
+collections:
+  - name: community.vmware
+    version: ">=4.0.0"
+
+  - name: community.general
+
+  - name: ansible.posix
+
+  - name: https://github.com/RedHatSatellite/satellite-operations-collection.git
+    type: git
+    version: master
+
+  - name: https://github.com/RedHatSatellite/satellite-ansible-collection.git
+    type: git
+    version: develop

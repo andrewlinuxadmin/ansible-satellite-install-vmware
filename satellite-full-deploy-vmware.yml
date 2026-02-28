@@ -1,0 +1,179 @@
+---
+# ── Play 1: Collect credentials ──────────────────────────────
+
+- name: Collect credentials
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_prompt:
+    - name: rhsm_username
+      prompt: "RHSM Username"
+      private: false
+    - name: rhsm_password
+      prompt: "RHSM Password"
+      private: true
+
+  tasks:
+    - name: Store credentials for later plays
+      ansible.builtin.set_fact:
+        rhsm_username: "{{ rhsm_username }}"
+        rhsm_password: "{{ rhsm_password }}"
+
+# ── Play 2: Provision RHEL VM on VMware vSphere ────────────
+
+- name: Provision RHEL VM on VMware vSphere
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    satellite_vm_ip: "192.168.1.100"
+    satellite_vm_mask: "255.255.255.0"
+    satellite_vm_gateway: "192.168.1.1"
+    satellite_vm_dns: "192.168.1.1"
+    satellite_vm_hostname: "satellite.example.com"
+
+  tasks:
+    - name: Verify xorrisofs is installed
+      ansible.builtin.command:
+        cmd: which xorrisofs
+      changed_when: false
+      delegate_to: localhost
+
+    - name: Provision RHEL VM for Satellite
+      ansible.builtin.include_role:
+        name: install_rhel_from_iso_vmware
+      vars:
+        # ── vCenter / ESXi ──────────────────────────────────────────────
+        vcenter_hostname: "vcenter.example.com"
+        vcenter_username: "administrator@vsphere.local"
+        vcenter_password: "{{ vault_vcenter_password }}"
+        vcenter_datacenter: "Datacenter"
+        vcenter_cluster: "Cluster01"
+        vcenter_datastore: "datastore1"
+        vcenter_network: "VM Network"
+        vcenter_folder: "/vm/satellite"
+
+        # ── VM ───────────────────────────────────────────────────────────
+        vm_name: "satellite"
+        vm_guest_id: "rhel9_64Guest"
+        vm_num_cpus: 4
+        vm_memory_mb: 20480
+
+        # ── Network ──────────────────────────────────────────────────────
+        vm_network_ip: "{{ satellite_vm_ip }}"
+        vm_network_mask: "{{ satellite_vm_mask }}"
+        vm_network_gateway: "{{ satellite_vm_gateway }}"
+        vm_network_dns: "{{ satellite_vm_dns }}"
+        vm_hostname: "{{ satellite_vm_hostname }}"
+
+        # ── ISO / Kickstart ─────────────────────────────────────────────
+        rhel_iso_path: "[datastore1] iso/rhel-9.6-x86_64-dvd.iso"
+        ks_iso_datastore: "datastore1"
+        ks_root_password: "{{ vault_ks_root_password }}"
+        ks_timezone: "America/Sao_Paulo"
+
+        # Root login required for Satellite install
+        ks_ssh_config:
+          PermitRootLogin: "yes"
+          PasswordAuthentication: "yes"
+
+        # ── Partitioning — OS disk (LVM) ────────────────────────────────
+        ks_lvs:
+          - name: lv_root
+            mount: /
+            size: 20480
+            fstype: xfs
+          - name: lv_usr
+            mount: /usr
+            size: 10240
+            fstype: xfs
+          - name: lv_var_log
+            mount: /var/log
+            size: 10240
+            fstype: xfs
+          - name: lv_swap
+            mount: swap
+            size: 4096
+            fstype: swap
+
+        # ── Extra disk (Satellite storage) ──────────────────────────────
+        vm_extra_disk:
+          size_gb: 400
+          type: "thin"
+          device: "sdb"
+          vg_name: "vg_satellite"
+          lvs:
+            - name: lv_var_lib_pulp
+              mount: /var/lib/pulp
+              size: 307200
+              fstype: xfs
+            - name: lv_var_lib_pgsql
+              mount: /var/lib/pgsql
+              size: 20480
+              fstype: xfs
+            - name: lv_opt_puppetlabs
+              mount: /opt/puppetlabs
+              size: 10240
+              fstype: xfs
+            - name: lv_var_lib_containers
+              mount: /var/lib/containers
+              size: 51200
+              fstype: xfs
+
+        # ── Extra packages ──────────────────────────────────────────────
+        ks_extra_packages:
+          - jq
+          - unzip
+          - wget
+          - curl
+          - git
+          - ansible-core
+          - vim-enhanced
+          - bash-completion
+          - net-tools
+          - bind-utils
+
+    - name: Add provisioned VM to in-memory inventory
+      ansible.builtin.add_host:
+        name: "{{ satellite_vm_ip }}"
+        groups: satellite
+        ansible_user: root
+        ansible_password: "{{ vault_ks_root_password }}"
+        ansible_ssh_common_args: >-
+          -o StrictHostKeyChecking=no
+          -o UserKnownHostsFile=/dev/null
+        satellite_install_rhsm_username: "{{ rhsm_username }}"
+        satellite_install_rhsm_password: "{{ rhsm_password }}"
+
+# ── Play 3: Install and configure Red Hat Satellite ─────────
+
+- name: Install and configure Red Hat Satellite
+  hosts: satellite
+  gather_facts: true
+
+  tasks:
+    - name: Install and configure Red Hat Satellite
+      ansible.builtin.include_role:
+        name: satellite_install
+      vars:
+        satellite_install_username: "admin"
+        satellite_install_password: "redhat"
+        satellite_install_organization: "ACME"
+        satellite_install_location: "ACME"
+        satellite_install_version: "6.18"
+        satellite_install_base_os: "rhel9"
+        satellite_install_manifest_path: "{{ playbook_dir }}/files/manifest.zip"
+        satellite_install_rhel_versions:
+          - 8
+          - 9
+          - 10
+        satellite_install_epel: true
+        satellite_install_lifecycle_envs:
+          - name: "DEV"
+            prior: "Library"
+          - name: "HML"
+            prior: "DEV"
+          - name: "PRD"
+            prior: "HML"

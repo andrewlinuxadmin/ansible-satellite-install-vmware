@@ -1,0 +1,7 @@
+.*
+!.gitignore
+!.ansible-lint
+test-*
+roles/
+collections/
+files/manifest.zip
